@@ -1,0 +1,60 @@
+terraform-eks/
+├── main.tf
+├── providers.tf
+├── variables.tf
+├── outputs.tf
+├── terraform.tfvars
+├── modules/
+│   ├── vpc/
+│   └── eks/
+provider "aws" {
+  region = var.region
+}
+
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+variable "region" {
+  default = "us-east-1"
+}
+
+variable "cluster_name" {
+  default = "taskapp-eks"
+}
+
+variable "vpc_cidr" {
+  default = "10.0.0.0/16"
+}
+variable "region" {
+  default = "us-east-1"
+}
+
+variable "cluster_name" {
+  default = "taskapp-eks"
+}
+
+variable "vpc_cidr" {
+  default = "10.0.0.0/16"
+}
+
+variable "vpc_cidr" {}
+
+
+
+
+
+
+
+
+
+
+
+
+
