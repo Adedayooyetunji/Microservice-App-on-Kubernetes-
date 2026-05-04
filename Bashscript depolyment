@@ -1,0 +1,245 @@
+#!/bin/bash
+
+echo "Deploying infrastructure..."
+cd terraform
+terraform apply -auto-approve
+
+echo "🔗 Configuring kubectl..."
+aws eks update-kubeconfig --region us-east-1 --name taskapp-eks
+
+echo "Deploying Kubernetes resources..."
+kubectl apply -f ../k8s/
+
+echo "Deployment complete!"
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# -----------------------------
+# CONFIG (EDIT THESE)
+# -----------------------------
+AWS_REGION="us-east-1"
+CLUSTER_NAME="taskapp-eks"
+DOCKERHUB_USERNAME="your-dockerhub-username"
+IMAGE_TAG="latest"
+
+TF_DIR="../terraform"
+K8S_DIR="../k8s"
+
+FRONTEND_IMAGE="$DOCKERHUB_USERNAME/frontend:$IMAGE_TAG"
+BACKEND_IMAGE="$DOCKERHUB_USERNAME/backend:$IMAGE_TAG"
+
+# -----------------------------
+# COLORS
+# -----------------------------
+GREEN="\033[0;32m"
+BLUE="\033[0;34m"
+RED="\033[0;31m"
+NC="\033[0m"
+
+log() { echo -e "${BLUE}[INFO]${NC} $1"; }
+success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# -----------------------------
+# CHECK DEPENDENCIES
+# -----------------------------
+check_tools() {
+  log "Checking dependencies..."
+
+  for cmd in terraform aws kubectl docker helm; do
+    if ! command -v $cmd &> /dev/null; then
+      error "$cmd is not installed"
+      exit 1
+    fi
+  done
+
+  success "All tools installed"
+}
+
+# -----------------------------
+# BUILD & PUSH IMAGES
+# -----------------------------
+build_and_push() {
+  log "Building Docker images..."
+
+  cd ../frontend
+  docker build -t $FRONTEND_IMAGE .
+  docker push $FRONTEND_IMAGE
+
+  cd ../backend
+  docker build -t $BACKEND_IMAGE .
+  docker push $BACKEND_IMAGE
+
+  cd - > /dev/null
+
+  success "Images built and pushed"
+}
+
+# -----------------------------
+# TERRAFORM APPLY
+# -----------------------------
+infra_up() {
+  log "Provisioning infrastructure with Terraform..."
+
+  cd $TF_DIR
+  terraform init -input=false
+  terraform apply -auto-approve
+
+  cd - > /dev/null
+
+  success "Infrastructure ready"
+}
+
+# -----------------------------
+# KUBECONFIG
+# -----------------------------
+configure_kubectl() {
+  log "Configuring kubectl..."
+
+  aws eks update-kubeconfig \
+    --region $AWS_REGION \
+    --name $CLUSTER_NAME
+
+  success "kubectl configured"
+}
+
+# -----------------------------
+# INSTALL INGRESS (NGINX)
+# -----------------------------
+install_ingress() {
+  log "Installing [NGINX Ingress Controller](chatgpt://generic-entity?number=0)..."
+
+  helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+  helm repo update
+
+  helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+    --namespace ingress-nginx \
+    --create-namespace
+
+  success "Ingress installed"
+}
+
+# -----------------------------
+# INSTALL MONITORING
+# -----------------------------
+install_monitoring() {
+  log "Installing monitoring stack: [Prometheus](chatgpt://generic-entity?number=1) + [Grafana](chatgpt://generic-entity?number=2)..."
+
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+  helm repo update
+
+  helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+    --namespace monitoring \
+    --create-namespace
+
+  success "Monitoring installed"
+}
+
+# -----------------------------
+# UPDATE IMAGE TAGS IN K8S
+# -----------------------------
+update_images() {
+  log "Updating Kubernetes manifests with new images..."
+
+  sed -i "s|your-dockerhub/frontend:latest|$FRONTEND_IMAGE|g" $K8S_DIR/frontend/deployment.yaml
+  sed -i "s|your-dockerhub/backend:latest|$BACKEND_IMAGE|g" $K8S_DIR/backend/deployment.yaml
+
+  success "Images updated in manifests"
+}
+
+# -----------------------------
+# DEPLOY K8S
+# -----------------------------
+deploy_k8s() {
+  log "Deploying application to Kubernetes..."
+
+  kubectl apply -f $K8S_DIR/namespace.yaml
+  kubectl apply -f $K8S_DIR/postgres/
+  kubectl apply -f $K8S_DIR/backend/
+  kubectl apply -f $K8S_DIR/frontend/
+  kubectl apply -f $K8S_DIR/ingress/
+  kubectl apply -f $K8S_DIR/autoscaling/
+
+  success "Application deployed"
+}
+
+# -----------------------------
+# VERIFY
+# -----------------------------
+verify() {
+  log "Verifying deployment..."
+
+  kubectl rollout status deployment/backend -n taskapp
+  kubectl rollout status deployment/frontend -n taskapp
+
+  kubectl get pods -n taskapp
+  kubectl get svc -n taskapp
+  kubectl get ingress -n taskapp
+
+  success "Deployment verified"
+}
+
+# -----------------------------
+# CLEANUP
+# -----------------------------
+destroy() {
+  log "Destroying everything..."
+
+  kubectl delete -f $K8S_DIR --ignore-not-found || true
+
+  cd $TF_DIR
+  terraform destroy -auto-approve
+  cd - > /dev/null
+
+  success "All resources destroyed"
+}
+
+# -----------------------------
+# USAGE
+# -----------------------------
+usage() {
+  echo "Usage: $0 {deploy|destroy|redeploy|verify}"
+  exit 1
+}
+
+# -----------------------------
+# MAIN
+# -----------------------------
+main() {
+  check_tools
+
+  case "${1:-}" in
+    deploy)
+      build_and_push
+      infra_up
+      configure_kubectl
+      install_ingress
+      install_monitoring
+      update_images
+      deploy_k8s
+      verify
+      ;;
+
+    redeploy)
+      build_and_push
+      update_images
+      deploy_k8s
+      verify
+      ;;
+
+    verify)
+      verify
+      ;;
+
+    destroy)
+      destroy
+      ;;
+
+    *)
+      usage
+      ;;
+  esac
+}
+
+main "$@"
